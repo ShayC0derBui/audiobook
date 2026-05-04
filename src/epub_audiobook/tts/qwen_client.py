@@ -74,20 +74,22 @@ class QwenTTSClient:
 
         logger.info(f"Loading Qwen3-TTS model: {model_id}")
         logger.info(f"  Device: {device}, Dtype: {dtype}")
+        logger.info("  (First run downloads ~3.8GB of model weights)")
 
-        # Build device_map and attn_implementation based on profile
-        load_kwargs: dict = {
-            "device_map": device if device != "mps" else "cpu",
-            "dtype": dtype,
-        }
+        # For CUDA: use device_map for optimal GPU placement
+        # For MPS/CPU: load without device_map, model stays on CPU
+        #   (Apple Silicon unified memory means CPU tensors are efficient)
+        load_kwargs: dict = {"dtype": dtype}
 
-        # Flash attention only works with float16/bfloat16 on CUDA
-        if device == "cuda" and dtype in (torch.float16, torch.bfloat16):
-            try:
-                import flash_attn  # noqa: F401
-                load_kwargs["attn_implementation"] = "flash_attention_2"
-            except ImportError:
-                pass
+        if device == "cuda":
+            load_kwargs["device_map"] = "cuda:0"
+            # Flash attention only works with float16/bfloat16 on CUDA
+            if dtype in (torch.float16, torch.bfloat16):
+                try:
+                    import flash_attn  # noqa: F401
+                    load_kwargs["attn_implementation"] = "flash_attention_2"
+                except ImportError:
+                    pass
 
         self.model = Qwen3TTSModel.from_pretrained(model_id, **load_kwargs)
         self._loaded = True
