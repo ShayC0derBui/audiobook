@@ -106,7 +106,7 @@ class AppConfig(BaseModel):
         """Return the appropriate torch dtype for the profile."""
         if self.profile == RuntimeProfile.APPLE_SILICON:
             return "float32"
-        return "float16"
+        return "bfloat16"
 
 
 def check_runtime_readiness(config: AppConfig) -> list[str]:
@@ -128,8 +128,8 @@ def check_runtime_readiness(config: AppConfig) -> list[str]:
         issues.append("CUDA not available. Check GPU drivers and torch installation.")
 
     try:
-        import transformers  # noqa: F401
+        import qwen_tts  # noqa: F401
     except ImportError:
-        issues.append("transformers library not installed.")
+        issues.append("qwen-tts package not installed. Run: pip install -U qwen-tts")
 
     return issues

@@ -170,11 +170,14 @@ def test_tts(
     client = QwenTTSClient(config)
     audio_data = client.synthesize(text, tts_config)
 
+    # Use the sample rate reported by the model, fallback to config
+    sr = client.sample_rate or tts_config.sample_rate
+
     import soundfile as sf
 
     output.parent.mkdir(parents=True, exist_ok=True)
-    sf.write(str(output), audio_data, tts_config.sample_rate)
-    console.print(f"\n[green]✓[/green] Saved: {output}")
+    sf.write(str(output), audio_data, sr)
+    console.print(f"\n[green]✓[/green] Saved: {output} ({len(audio_data)/sr:.1f}s)")
 
 
 if __name__ == "__main__":

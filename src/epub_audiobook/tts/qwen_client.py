@@ -1,4 +1,8 @@
-"""Qwen3-TTS model initialization and VoiceDesign synthesis."""
+"""Qwen3-TTS model initialization and VoiceDesign synthesis.
+
+Uses the official `qwen-tts` package (pip install qwen-tts).
+Supports VoiceDesign mode for narrator identity generation.
+"""
 
 from __future__ import annotations
 
@@ -12,7 +16,24 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_MODEL_ID = "Qwen/Qwen3-TTS"
+# Model IDs on HuggingFace
+VOICE_DESIGN_MODEL = "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign"
+CUSTOM_VOICE_MODEL = "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice"
+
+# Language code mapping from our short codes to Qwen3-TTS expected values
+LANGUAGE_MAP = {
+    "en": "English",
+    "zh": "Chinese",
+    "ja": "Japanese",
+    "ko": "Korean",
+    "de": "German",
+    "fr": "French",
+    "ru": "Russian",
+    "pt": "Portuguese",
+    "es": "Spanish",
+    "it": "Italian",
+    "auto": "Auto",
+}
 
 
 class TTSSynthesisError(Exception):
@@ -24,39 +45,57 @@ class TTSSynthesisError(Exception):
 
 
 class QwenTTSClient:
-    """Client for Qwen3-TTS VoiceDesign synthesis."""
+    """Client for Qwen3-TTS VoiceDesign synthesis using qwen-tts package."""
 
     def __init__(self, config: "AppConfig") -> None:
         self.config = config
         self.model = None
-        self.processor = None
         self._loaded = False
 
     def _ensure_loaded(self) -> None:
-        """Lazy-load model and processor on first use."""
+        """Lazy-load model on first use."""
         if self._loaded:
             return
 
         import torch
-        from transformers import AutoProcessor, AutoModelForTextToWaveform
+        from qwen_tts import Qwen3TTSModel
 
-        model_id = self.config.model_path or DEFAULT_MODEL_ID
+        model_id = self.config.model_path or VOICE_DESIGN_MODEL
         device = self.config.get_torch_device()
         dtype_str = self.config.get_torch_dtype()
-        dtype = torch.float32 if dtype_str == "float32" else torch.float16
+
+        # Map dtype string to torch dtype
+        dtype_map = {
+            "float32": torch.float32,
+            "float16": torch.float16,
+            "bfloat16": torch.bfloat16,
+        }
+        dtype = dtype_map.get(dtype_str, torch.float32)
 
         logger.info(f"Loading Qwen3-TTS model: {model_id}")
         logger.info(f"  Device: {device}, Dtype: {dtype}")
 
-        self.processor = AutoProcessor.from_pretrained(model_id, trust_remote_code=True)
-        self.model = AutoModelForTextToWaveform.from_pretrained(
-            model_id,
-            torch_dtype=dtype,
-            trust_remote_code=True,
-        ).to(device)
+        # Build device_map and attn_implementation based on profile
+        load_kwargs: dict = {
+            "device_map": device if device != "mps" else "cpu",
+            "dtype": dtype,
+        }
 
+        # Flash attention only works with float16/bfloat16 on CUDA
+        if device == "cuda" and dtype in (torch.float16, torch.bfloat16):
+            try:
+                import flash_attn  # noqa: F401
+                load_kwargs["attn_implementation"] = "flash_attention_2"
+            except ImportError:
+                pass
+
+        self.model = Qwen3TTSModel.from_pretrained(model_id, **load_kwargs)
         self._loaded = True
         logger.info("Model loaded successfully")
+
+    def _resolve_language(self, lang_code: str) -> str:
+        """Convert short language code to Qwen3-TTS language name."""
+        return LANGUAGE_MAP.get(lang_code.lower(), lang_code)
 
     def synthesize(
         self,
@@ -68,30 +107,24 @@ class QwenTTSClient:
 
         Returns numpy array of audio samples at the configured sample rate.
         """
-        import torch
-
         self._ensure_loaded()
 
-        device = self.config.get_torch_device()
-
-        # Build VoiceDesign prompt following Qwen3-TTS format
-        voice_prompt = tts_config.voice_design_prompt
-        language = tts_config.language
+        language = self._resolve_language(tts_config.language)
+        instruct = tts_config.voice_design_prompt
 
         try:
-            # Construct the input in Qwen3-TTS VoiceDesign format
-            inputs = self.processor(
+            wavs, sr = self.model.generate_voice_design(
                 text=text,
-                voice_design_prompt=voice_prompt,
                 language=language,
-                return_tensors="pt",
-            ).to(device)
+                instruct=instruct,
+            )
 
-            with torch.no_grad():
-                outputs = self.model.generate(**inputs)
+            audio = wavs[0]  # First (and only) result
 
-            # Extract audio waveform
-            audio = outputs.cpu().numpy().squeeze()
+            if isinstance(audio, np.ndarray):
+                pass
+            else:
+                audio = np.array(audio, dtype=np.float32)
 
             if audio.ndim == 0 or len(audio) == 0:
                 raise TTSSynthesisError(
@@ -99,6 +132,8 @@ class QwenTTSClient:
                     chunk_id=chunk_id,
                 )
 
+            # Store the actual sample rate from model for caller reference
+            self._last_sample_rate = sr
             return audio
 
         except TTSSynthesisError:
@@ -108,3 +143,8 @@ class QwenTTSClient:
                 f"TTS synthesis failed: {e}",
                 chunk_id=chunk_id,
             ) from e
+
+    @property
+    def sample_rate(self) -> int | None:
+        """Return sample rate from last synthesis, or None if not yet synthesized."""
+        return getattr(self, "_last_sample_rate", None)
