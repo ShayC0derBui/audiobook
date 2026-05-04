@@ -24,6 +24,10 @@ class TTSConfig(BaseModel):
         default="A calm, clear adult narrator with natural pacing and warm tone.",
         description="VoiceDesign instruction for consistent narrator identity.",
     )
+    speaker: str = Field(
+        default="Ryan",
+        description="Preset speaker for CustomVoice fast mode (e.g. Ryan, Aiden, Vivian).",
+    )
     language: str = Field(
         default="en",
         description="Fixed language code for the entire book.",

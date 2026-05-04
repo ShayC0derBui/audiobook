@@ -52,6 +52,12 @@ def convert(
     voice_prompt: Optional[str] = typer.Option(
         None, "--voice-prompt", help="VoiceDesign narrator prompt."
     ),
+    fast: bool = typer.Option(
+        False, "--fast", help="Use 0.6B CustomVoice model (~3x faster, preset speakers)."
+    ),
+    speaker: str = typer.Option(
+        "Ryan", "--speaker", help="Preset speaker for --fast mode (e.g. Ryan, Aiden, Vivian)."
+    ),
     chapters: Optional[str] = typer.Option(
         None, "--chapters", "-c", help="Chapter range (e.g., '1-5')."
     ),
@@ -64,19 +70,26 @@ def convert(
 ) -> None:
     """Convert an EPUB file to audiobook WAV files."""
     from epub_audiobook.pipeline import run_convert
+    from epub_audiobook.tts.qwen_client import CUSTOM_VOICE_MODEL_FAST
 
     detected_profile = RuntimeProfile(profile) if profile else AppConfig.detect_profile()
+
+    # --fast overrides model to the 0.6B CustomVoice model
+    resolved_model = model_path
+    if fast and not model_path:
+        resolved_model = CUSTOM_VOICE_MODEL_FAST
 
     config = AppConfig(
         profile=detected_profile,
         input_path=input_path,
         output_dir=output_dir,
         chapters=chapters,
-        model_path=model_path,
+        model_path=resolved_model,
     )
     if voice_prompt:
         config.tts.voice_design_prompt = voice_prompt
     config.tts.language = language
+    config.tts.speaker = speaker
     config.audio.merge_full_book = merge_book
 
     run_convert(config)
@@ -135,24 +148,35 @@ def test_tts(
     voice_prompt: Optional[str] = typer.Option(
         None, "--voice-prompt", help="VoiceDesign prompt."
     ),
+    fast: bool = typer.Option(
+        False, "--fast", help="Use 0.6B CustomVoice model (~3x faster)."
+    ),
+    speaker: str = typer.Option(
+        "Ryan", "--speaker", help="Preset speaker for --fast mode."
+    ),
     model_path: Optional[str] = typer.Option(
         None, "--model", "-m", help="Qwen3-TTS model path."
     ),
 ) -> None:
     """Test TTS synthesis with a short text sample."""
     from epub_audiobook.config import TTSConfig
-    from epub_audiobook.tts.qwen_client import QwenTTSClient
+    from epub_audiobook.tts.qwen_client import QwenTTSClient, CUSTOM_VOICE_MODEL_FAST
 
     detected_profile = RuntimeProfile(profile) if profile else AppConfig.detect_profile()
 
     tts_config = TTSConfig()
     if voice_prompt:
         tts_config.voice_design_prompt = voice_prompt
+    tts_config.speaker = speaker
+
+    resolved_model = model_path
+    if fast and not model_path:
+        resolved_model = CUSTOM_VOICE_MODEL_FAST
 
     config = AppConfig(
         profile=detected_profile,
         input_path=Path("."),  # dummy
-        model_path=model_path,
+        model_path=resolved_model,
     )
 
     # Check runtime
@@ -162,15 +186,16 @@ def test_tts(
             console.print(f"[red]✗[/red] {issue}")
         raise typer.Exit(1)
 
+    mode = "CustomVoice/fast (0.6B)" if fast else "VoiceDesign (1.7B)"
     console.print("[green]✓[/green] Runtime ready")
     console.print(f"  Profile: {detected_profile.value}")
     console.print(f"  Device: {config.get_torch_device()}")
     console.print(f"  Dtype: {config.get_torch_dtype()}")
+    console.print(f"  Mode: {mode}")
 
     client = QwenTTSClient(config)
     audio_data = client.synthesize(text, tts_config)
 
-    # Use the sample rate reported by the model, fallback to config
     sr = client.sample_rate or tts_config.sample_rate
 
     import soundfile as sf
