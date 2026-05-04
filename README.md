@@ -1,5 +1,7 @@
 # EPUB Audiobook CLI
 
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/ShayC0derBui/audiobook/blob/main/notebooks/test_tts_colab.ipynb)
+
 Convert EPUB books to audiobooks using **Qwen3-TTS VoiceDesign** — chapter-by-chapter with full resume support.
 
 ## Features
